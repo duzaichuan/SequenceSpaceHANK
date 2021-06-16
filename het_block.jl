@@ -1,7 +1,7 @@
-using Parameters, LinearAlgebra
+using Parameters, LinearAlgebra, Dictionaries
 include("/home/zaichuan/Projects/sequence-space-solving-ha-models/utils.jl")
 
-@with_kw struct HetBlock @deftype Vector{Symbol}
+@with_kw mutable struct HetBlock @deftype Vector{Symbol}
     exogenous::Symbol=:Pi
     policy
     backward
@@ -11,10 +11,14 @@ include("/home/zaichuan/Projects/sequence-space-solving-ha-models/utils.jl")
     non_back_outputs = setdiff(all_outputs,backward)
     # aggregate outputs and inputs for utils.block_sort
     inputs = setdiff(replace(all_inputs, Symbol(exogenous,"_p")=>exogenous), [Symbol(k, "_p") for k in backward])
-    outputs::Vector{String} = [uppercase(String(k)) for k in non_back_outputs]
+    outputs = [Symbol(uppercase(String(k))) for k in non_back_outputs]
     hetinput = nothing
     hetinput_inputs
     hetinput_outputs_order
+    saved::Dict{Symbol,Array}
+    prelim_saved::Dict{Symbol,Array}
+    saved_shock_list
+    saved_output_list
 end
 
 
@@ -45,7 +49,7 @@ function policy_ss(m::HetBlock, back_step_fun::Function;tol=1e-8,maxit=5000, ssi
     converged= false
     for it in range(maxit)
         try
-            sspol = Dict(k => v for (k, v) in zip(m.all_outputs, back_step_fun(ssin...)))
+            sspol = Dict(k => v for (k, v) in zip(m.all_outputs, back_step_fun(collect(values(ssin))))) # back_step_fun cannot directly read keywords in ssin..., so the order of ssin dictionary is important (dictionary vs. Dict)
         catch e
             @warn "Missing input $e"
         end
@@ -55,15 +59,15 @@ function policy_ss(m::HetBlock, back_step_fun::Function;tol=1e-8,maxit=5000, ssi
             converged = true
         end
         merge!(old, Dict(k => sspol[k] for k in m.policy))
-        merge!(ssin, Dict(Symbol(String(k)*"_p") => sspol[k] for k in m.backward))
+        merge!(ssin, Dict(Symbol(k,"_p") => sspol[k] for k in m.backward))
     end
     if converged != true
         @error "No convergence of policy functions after $maxit backward iterations!"
     end
 
     for k in m.inputs_p
-        ssin[k] = ssin[Symbol(String(k)*"_p")]
-        delete!(ssin, Symbol(String(k)*"_p"))
+        ssin[k] = ssin[Symbol(k,"_p")]
+        delete!(ssin, Symbol(k,"_p"))
     end
     if isnothing(m.hetinput) != true
         for k in m.hetinput_inputs
@@ -109,13 +113,25 @@ function dist_ss(m::HetBlock, Pi, sspol,grid; tol=1e-10, maxit=100000, D_seed= n
     return D
 end
 
+function jac(m::HetBlock, ss, T, shock_list; output_list = nothing, h= 1e-4, save=false, use_saved=false)
+    if output_list === nothing
+        output_list = m.non_back_outputs
+    end
+    if use_saved
+        return utils.extract_nested_dict(savedA=m.saved[:J], keys1=[Symbol(uppercase(String(o))) for o in output_list], shape=(T,T))
+    end
+    ssin_dict, Pi, ssout_list, ss_for_hetinput, sspol_i, sspol_pi, sspol_space = jac_prelim(ss, save)
+
+    curlyYs, curlyDs = Dict(), Dict()
+end
+
 function make_inputs(m::HetBlock, indict)
     if isnothing(m.hetinput) != true
         outputs_as_tuple = utils.make_tuple(m.hetinput) # argument form in make_tuple is wierd        
     end
     indict_new = Dict(k => indict[k] for k in setdiff(m.all_inputs, m.inputs_p) if k in indict)
     try
-        return merge(indict_new, Dict(Symbol(String(k)*"_p") => indict[k] for k in m.inputs_p))
+        return merge(indict_new, Dict(Symbol(k,"_p") => indict[k] for k in m.inputs_p))
     catch e
        print("Missing backward variable or Markov matrix $e !") 
 end

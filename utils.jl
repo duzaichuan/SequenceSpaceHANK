@@ -211,3 +211,7 @@ function forward_step_1d(D, Pi_T, x_i, x_pi)
     # then using exogenous transition matrix
     return Pi_T * Dnew
 end
+
+function numerical_diff(func, ssinputs_dict; h=1e-4, y_ss_list= nothing)
+    if y_ss_list === nothing
+        y_ss_list = make_tuple(func())
