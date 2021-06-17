@@ -212,6 +212,30 @@ function forward_step_1d(D, Pi_T, x_i, x_pi)
     return Pi_T * Dnew
 end
 
-function numerical_diff(func, ssinputs_dict; h=1e-4, y_ss_list= nothing)
+function forward_step_shock_1d(Dss, Pi_T, x_i_ss, x_pi_shock)
+    nZ, nX = size(Dss)
+    Dshock = zeros(nZ,nZ)
+    for iz in range(nZ)
+        for ix in range(nX)
+            i = x_i_ss[iz,ix]
+            dshock = x_pi_shock[iz,ix] * Dss[iz,ix]
+            Dshock[iz,i] += dshock
+            Dshock[iz,i+1] -= dshock
+        end
+    end
+    return Pi_T * Dshock
+end
+
+function numerical_diff(func, ssinputs_dict, shock_dict; h=1e-4, y_ss_list= nothing)
     if y_ss_list === nothing
-        y_ss_list = make_tuple(func())
+        y_ss_list = make_tuple(func(values(ssinputs_dict)...))
+    end
+    shocked_inputs = Dict(k => ssinputs_dict[k] .+ h .* shock for (k,shock) in shock_dict)
+    shocked_inputs = merge(ssinputs_dict, shocked_inputs)
+    y_list = make_tuple(func(values(ssinputs_dict)...))
+
+    dy_list = [(y .- y_ss) ./ h for (y, y_ss) in zip(y_list, y_ss_list)]
+end
+
+function extract_nested_dict()
+end
