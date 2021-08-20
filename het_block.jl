@@ -1,5 +1,5 @@
-using Parameters, LinearAlgebra, Dictionaries
-include("/home/zaichuan/Projects/sequence-space-solving-ha-models/utils.jl")
+using Parameters, LinearAlgebra, OrderedCollections
+include("utils.jl")
 
 @with_kw mutable struct HetBlock @deftype Vector{Symbol}
     exogenous::Symbol=:Pi
@@ -99,7 +99,7 @@ function dist_ss(m::HetBlock, Pi, sspol,grid; tol=1e-10, maxit=100000, D_seed= n
     Pi_T = copy(transpose(Pi))
 
     for it in range(maxit)
-        Dnew = forward_step(D, Pi_T, sspol_i, sspol_pi)
+        Dnew = forward_step(m,D, Pi_T, sspol_i, sspol_pi)
 
         if mod(it, 10) == 0 && utils.within_tolerance(D,Dnew, tol)
             break
@@ -124,13 +124,13 @@ function jac(m::HetBlock, back_step_fun, ss, T, shock_list; output_list = nothin
 
     curlyYs, curlyDs = Dict(), Dict()
     for i in shock_list
-        curlyYs[i], curlyDs[i] = backward_iteration_fakenews(i, output_list, ssin_dict, ssout_list,
+        curlyYs[i], curlyDs[i] = backward_iteration_fakenews(m, i, output_list, ssin_dict, ssout_list,
                                                              ss[:D], copy(transpose(Pi)), sspol_i,
-                                                             sspol_pi, sspol_space, T, h, ss_for_hetinput)
+                                                             sspol_pi, sspol_space, T, h=h, ss_for_hetinput=ss_for_hetinput)
     end
     curlyPs = Dict()
     for o in output_list
-        curlyPs[o] = forward_iteration_fakenews(ss[o], Pi, sspol_i, sspol_pi, T-1)
+        curlyPs[o] = forward_iteration_fakenews(m, ss[o], Pi, sspol_i, sspol_pi, T-1)
     end
 
     F = Dict(uppercase(o) => Dict() for o in output_list)
@@ -204,7 +204,7 @@ function backward_iteration_fakenews(m::HetBlock, input_shocked, output_list, ss
         din_dict = Dict(input_shocked => 1)
     end
 
-    curlyV, curlyD, curlyY = backward_step_fakenews(din_dict, output_list, ssin_dict, ssout_list, Dss, Pi_T, sspol_i, sspol_pi, sspol_space, h)
+    curlyV, curlyD, curlyY = backward_step_fakenews(m, din_dict, output_list, ssin_dict, ssout_list, Dss, Pi_T, sspol_i, sspol_pi, sspol_space, h)
     
     curlyDs = zeros(T,size(curlyD,1),size(curlyD,2))
     curlyYs = Dict(k => zeros(T) for k in keys(curlyY))
@@ -215,7 +215,7 @@ function backward_iteration_fakenews(m::HetBlock, input_shocked, output_list, ss
     end
 
     for t in 2:T
-        curlyV, curlyDs[t,:,:], curlyY = backward_step_fakenews(Dict(Symbol(k,"_p") => v for (k,v) in curlyV),
+        curlyV, curlyDs[t,:,:], curlyY = backward_step_fakenews(m, Dict(Symbol(k,"_p") => v for (k,v) in curlyV),
                                                                 output_list, ssin_dict, ssout_list, Dss, Pi_T, sspol_i, sspol_pi, sspol_space, h)
         for k in curlyY
             curlyYs[k][t] = curlyY[k]
@@ -234,6 +234,44 @@ function backward_step_fakenews(m::HetBlock, back_step_fun, din_dict, output_lis
     
     curlyY = Dict(k => dot(Dss, shocked_outputs[k]) for k in output_list)
     return curlyV, curlyD, curlyY
+end
+
+function forward_iteration_fakenews(m::HetBlock, o_ss, Pi, pol_i_ss, pol_pi_ss, T)
+    curlyPs = zeros(T,size(o_ss,1),size(o_ss,2))
+    curlyPs[1,:,:] = utils.demean(o_ss)
+    for t in 2:T
+        curlyPs[t,:,:] = utils.demean(forward_step_transpose(m, curlyPs[t-1,:,:], Pi, pol_i_ss, pol_pi_ss))
+    end
+    return curlyPs
+end
+
+function build_F(curlyYs, curlyDs, curlyPs)
+    T= size(curlyDs,1)
+    Tpost = size(curlyPs,1) -T + 2
+    F = zeros(Tpost+T-1, T)
+    F[1,:] = curlyYs
+    permuPs = permutedims(curlyPs,[3,2,1]) # julia reshape arrays by columns, while python by rows
+    permuDs = permutedims(curlyDs,[3,2,1])
+    F[2:end,:] = transpose(reshape(permuPs, :, Tpost+T-2)) * reshape(permuDs, :, T)
+end
+
+function J_from_F(F)
+    J = copy(F)
+    for t in 2:size(J,2)
+        J[2:end,t] += J[1:end-1, t-1]
+    end
+end
+
+function forward_step_transpose(m::HetBlock, D, Pi, pol_i, pol_pi)
+    if length(m.policy) == 1
+        p, = m.policy
+        return utils.forward_step_transpose_1d(D, Pi, pol_i[p], pol_pi[p])
+    elseif length(m.policy) == 2
+        p1,p2 = m.policy
+        return utils.forward_step_transpose_2d(D, Pi, pol_i[p1], pol_i[p2], pol_pi[p1], pol_pi[p2])
+    else
+        @error "length of policy variables only up to 2 implemented!"
+    end
 end
 
 function forward_step(m::HetBlock, D, Pi_T, pol_i, pol_pi)

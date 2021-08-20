@@ -1,3 +1,4 @@
+module Utils
 
 function interpolate_y(x::Array{Float64},y::Array{Float64},xq::Array{Float64})
     nxq, nx = size(xq,1), size(x,1)
@@ -239,3 +240,86 @@ end
 
 function extract_nested_dict()
 end
+
+function demean(x::Array{Float64})
+    return x .- mean(x)
+end
+
+function block_sort(block_list, findrequired=false)
+    outmap = Dict()
+    for num, block in enumerate(block_list)
+        if hasproperty(block, :outputs)
+            outputs = block.outputs
+        elseif typeof(block)==Dict
+            outputs = keys(block)
+        else
+            @error "$block is not recognized as block or does not provide outputs"
+        end
+
+        for o in outputs
+            if o in outmap
+                @error "$o is output twice"
+            end
+            outmap[o] = num
+        end
+    end
+
+    dep = Dict(num=> Set() for num in 1:length(block_list))
+    if findrequired
+        required = Set()
+    end
+    for num, block in enumerate(block_list)
+        if hasproperty(block, :inputs)
+            inputs = block.inputs
+        else
+            inputs = Set(i for o in block for i in block[o])
+        end
+
+        for i in inputs
+            if i in outmap
+                push!(dep[num], outmap[i])
+                if findrequired
+                    push!(required, i)
+                end
+            end
+        end
+    end
+
+    if findrequired
+        return topological_sort(dep), required
+    else
+        return topological_sort(dep)
+    end
+end
+
+function topological_sort(dep, names=nothing)
+    dep, revdep = complete_reverse_graph(dep)
+    nodeps = [n for n in dep if isempty(dep[n])]
+    topsorted = Int[]
+
+    while !isempty(nodeps)
+        n = pop!(nodeps)
+        append!(topsorted, n)
+        for n2 in revdep[n]
+            delete!(dep[n2], n)
+            if isempty(dep[n2])
+                append!(nodeps, n2)
+            end
+        end
+    end
+
+    if length(topsorted) != length(dep)
+        cycle_int = find_cycle(dep, setdiff(keys(dep),Set(topsorted)))
+        @assert cycle_int !== nothing "topological sort failed but no cycle, THIS SHOULD NEVER EVER HAPPEN"
+        if !isempty(names)
+            cycle = [names[i] for i in cycle_int]
+        else
+            cycle = cycle_int
+            error("Topological sort failed: cyclic dependency {" -> ".join(cycle)}")
+        end
+    end
+
+    return topsorted
+end
+
+end # module
