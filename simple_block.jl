@@ -1,4 +1,4 @@
-# module Simple
+module Simple
 
 using MacroTools, Parameters, LinearAlgebra, OrderedCollections
 include("utils.jl")
